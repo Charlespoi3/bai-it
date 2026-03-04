@@ -4,18 +4,28 @@
 
 ## 当前状态
 
-**管理端引导系统 v2 完成。** 199 个单元测试全通过，构建正常。Phase 2 待浏览器验收。
+**设置页精简 + 模型更新 + 端到端测试连接完成。** 199 个单元测试全通过，构建正常。Gemini 3.1 Flash-Lite 和 DeepSeek 已验证端到端跑通。
 
-### 本次完成（0304 引导系统 v2）
+### 本次完成（0304 设置页精简 + API 调试）
 
-**管理端引导逻辑从全局三态枚举重构为 per-tab 三维状态：**
+**Settings Tab 大幅精简，只保留 API Key 配置 + 测试连接：**
 
-1. **useOnboardingState** — 返回 `{ hasApi, hasData, hasAnalyzedData, pendingCount, loading }`，同时查 `pending_sentences` 和 `learning_records`
-2. **OnboardingBanner** — 改为 variant 模式（browse / api / browse-with-api / null），按 tab 选择变体
-3. **useDashboardData** — 真实模式下合并 pending 计数到 totalSentences，新增 recentPending fallback
-4. **App.tsx** — `dashboardIsExample = !hasData`，`reviewSentencesIsExample = !hasAnalyzedData`，banner variant 按 activeTab 分别计算
-5. **Dashboard** — 无 analyzed 但有 pending 时展示「最近遇到的句子」卡片；有 pending + 无 API 时底部温和引导条
-6. **CSS** — `.nudge-banner` 温和引导条样式
+1. **模型列表更新**（`constants.ts` + `types.ts`）— 5 家 provider 全部更新为官方最新模型 ID
+   - Gemini: `gemini-3.1-flash-lite-preview`（默认）、`gemini-2.5-flash`、`gemini-2.5-flash-lite`
+   - ChatGPT: `gpt-4.1-mini`（默认）、`gpt-5-nano`、`gpt-5-mini`
+   - DeepSeek: `deepseek-chat`（V3.2）
+   - Qwen: `qwen3-flash`（默认）、`qwen-plus`
+   - Kimi: `kimi-k2.5`（默认）、`moonshot-v1-8k`
+2. **端到端测试连接**（`Settings.tsx`）— 点击"测试连接"发真实掰句请求，走完整 `chunkSentences()` 链路验证
+3. **删除"显示"section** — 语言选择器、掰句力度、显示方式（这些在 Popup 中设置）
+4. **删除"数据管理"section** — 导出 JSON、清空学习记录、重置设置
+5. **删除"保存"按钮** — config 已自动保存
+6. **App.tsx** — Settings 不再传 `db`、`saveConfig` props
+7. **CSS** — 删除 save/danger/btn-text 样式，新增 verify-btn/verify-result 样式
+
+### 上次完成（0304 引导系统 v2）
+
+**管理端引导逻辑从全局三态枚举重构为 per-tab 三维状态。**
 
 ### 上次完成（0304 Options 生词 Tooltip + 掌握标记）
 
@@ -173,6 +183,7 @@
 - [x] **Phase 1 统一扫读重构 + Twitter/Substack 兼容**（编码 + 验证通过）
 - [x] **Phase 2 数据采集 + 管理端懒处理**（编码完成，199 测试通过）
 - [x] **Options 生词 Tooltip + 掌握标记**（精致风格 + inherit 融入 + 持久化）
+- [x] **设置页精简 + 模型更新 + 端到端测试连接**（Gemini 3.1 / DeepSeek 已验证跑通）
 
 ## 编码细节
 
