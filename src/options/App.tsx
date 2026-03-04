@@ -111,10 +111,8 @@ export function App() {
               {activeTab === "settings" && (
                 <Settings
                   key={tabKey}
-                  db={db}
                   config={config}
                   configLoading={configLoading}
-                  saveConfig={saveConfig}
                   updateLLM={updateLLM}
                 />
               )}

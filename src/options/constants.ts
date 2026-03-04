@@ -7,28 +7,28 @@ export const PROVIDER_INFO: Record<
 > = {
   gemini: {
     label: "Gemini",
-    models: ["gemini-2.0-flash", "gemini-2.0-flash-lite", "gemini-2.5-flash", "gemini-2.5-pro"],
-    hint: "掰句消耗 token 很少，Flash 足够且免费额度高。想要更准可以选 Pro。",
+    models: ["gemini-3.1-flash-lite-preview", "gemini-2.5-flash", "gemini-2.5-flash-lite"],
+    hint: "3.1 Flash-Lite 最新最快，有免费额度。2.5 Flash 更稳定。",
   },
   chatgpt: {
     label: "ChatGPT",
-    models: ["gpt-4o-mini", "gpt-4o", "gpt-4.1-mini", "gpt-4.1-nano"],
-    hint: "推荐 4o-mini，性价比最高。",
+    models: ["gpt-4.1-mini", "gpt-5-nano", "gpt-5-mini"],
+    hint: "4.1-mini 结构化输出稳定，适合掰句分析。nano 更便宜但质量略低。",
   },
   deepseek: {
     label: "DeepSeek",
-    models: ["deepseek-chat", "deepseek-reasoner"],
-    hint: "国产模型，价格便宜，中文理解好。",
+    models: ["deepseek-chat"],
+    hint: "中文输出最自然，价格便宜，推荐首选。",
   },
   qwen: {
     label: "Qwen",
-    models: ["qwen-turbo", "qwen-plus", "qwen-max"],
-    hint: "阿里通义千问，turbo 最快最便宜。",
+    models: ["qwen3-flash", "qwen-plus"],
+    hint: "qwen3-flash 速度快价格低。qwen-plus 质量更好。",
   },
   kimi: {
     label: "Kimi",
-    models: ["moonshot-v1-8k", "moonshot-v1-32k"],
-    hint: "月之暗面，长文本能力强。",
+    models: ["kimi-k2.5", "moonshot-v1-8k"],
+    hint: "K2.5 是当前主力模型。moonshot-v1 是旧版。",
   },
 };
 

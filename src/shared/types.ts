@@ -36,11 +36,11 @@ export interface BaitConfig {
 }
 
 export const DEFAULT_PROVIDERS: Record<ProviderKey, ProviderConfig> = {
-  gemini: { apiKey: "", model: "gemini-2.0-flash" },
-  chatgpt: { apiKey: "", model: "gpt-4o-mini" },
+  gemini: { apiKey: "", model: "gemini-3.1-flash-lite-preview" },
+  chatgpt: { apiKey: "", model: "gpt-4.1-mini" },
   deepseek: { apiKey: "", model: "deepseek-chat" },
-  qwen: { apiKey: "", model: "qwen-turbo" },
-  kimi: { apiKey: "", model: "moonshot-v1-8k" },
+  qwen: { apiKey: "", model: "qwen3-flash" },
+  kimi: { apiKey: "", model: "kimi-k2.5" },
 };
 
 export const DEFAULT_CONFIG: BaitConfig = {
