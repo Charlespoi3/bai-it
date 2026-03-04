@@ -1,10 +1,21 @@
+import { useMasteredWords } from "../hooks/useMasteredWords.ts";
+
 interface ChunkLinesProps {
   chunked: string;
   newWords?: { word: string; definition: string }[];
 }
 
 export function ChunkLines({ chunked, newWords = [] }: ChunkLinesProps) {
-  const vocabSet = new Set(newWords.map((w) => w.word.toLowerCase()));
+  const { masteredWords } = useMasteredWords();
+
+  const defMap = new Map<string, string>();
+  const vocabSet = new Set<string>();
+  for (const w of newWords) {
+    const lower = w.word.toLowerCase();
+    vocabSet.add(lower);
+    defMap.set(lower, w.definition);
+  }
+
   const lines = chunked.split("\n");
 
   return (
@@ -14,8 +25,7 @@ export function ChunkLines({ chunked, newWords = [] }: ChunkLinesProps) {
         const indent = line.length - trimmed.length;
         const isIndented = indent > 0;
 
-        // Highlight vocab words
-        const parts = highlightVocab(trimmed, vocabSet);
+        const parts = highlightVocab(trimmed, vocabSet, defMap, masteredWords);
 
         return (
           <div key={i} className={isIndented ? "indent" : ""}>
@@ -27,7 +37,12 @@ export function ChunkLines({ chunked, newWords = [] }: ChunkLinesProps) {
   );
 }
 
-function highlightVocab(text: string, vocabSet: Set<string>): React.ReactNode[] {
+function highlightVocab(
+  text: string,
+  vocabSet: Set<string>,
+  defMap: Map<string, string>,
+  masteredWords: Set<string>
+): React.ReactNode[] {
   if (vocabSet.size === 0) return [text];
 
   const pattern = Array.from(vocabSet)
@@ -43,8 +58,16 @@ function highlightVocab(text: string, vocabSet: Set<string>): React.ReactNode[] 
     if (match.index > lastIndex) {
       parts.push(text.slice(lastIndex, match.index));
     }
+    const wordLower = match[0].toLowerCase();
+    const isMastered = masteredWords.has(wordLower);
+    const def = defMap.get(wordLower) || "";
     parts.push(
-      <span key={match.index} className="vocab">
+      <span
+        key={match.index}
+        className={isMastered ? "vocab vocab-mastered" : "vocab"}
+        data-word={wordLower}
+        data-def={def}
+      >
         {match[0]}
       </span>
     );

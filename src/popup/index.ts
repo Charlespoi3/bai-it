@@ -20,9 +20,12 @@ const actionBtn = $<HTMLButtonElement>("action-btn");
 const actionText = $("action-text");
 const siteToggle = $<HTMLInputElement>("site-toggle");
 const content = $("content");
-const assistSlider = $<HTMLInputElement>("assist-slider");
+const sliderContainer = $("assist-slider");
+const sliderFill = $("slider-fill");
+const sliderThumb = $("slider-thumb");
 const assistHint = $("assist-hint");
 const segControl = $("seg-control");
+const segPill = $("seg-pill");
 const modeDesc = $("mode-desc");
 const preview = $("preview");
 const linkOptions = $<HTMLAnchorElement>("link-options");
@@ -72,6 +75,24 @@ const DISPLAY_MODES: Record<string, { desc: string; intensity: number; html: str
     html: `<span class="line line-main">She finished the project</span><span class="dot"> · </span><span class="line line-sub">that no one thought was possible,</span><span class="dot"> · </span><span class="line line-sub">before the deadline.</span>`,
   },
 };
+
+// ========== 滑杆 ==========
+
+const SLIDER_MIN = 1;
+const SLIDER_MAX = 5;
+let currentLevel = 3;
+
+function updateSliderVisuals(level: number): void {
+  const pct = ((level - SLIDER_MIN) / (SLIDER_MAX - SLIDER_MIN)) * 100;
+  sliderFill.style.width = pct + "%";
+  sliderThumb.style.left = pct + "%";
+}
+
+function getSliderLevelFromX(clientX: number): number {
+  const rect = sliderContainer.getBoundingClientRect();
+  const ratio = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
+  return Math.round(ratio * (SLIDER_MAX - SLIDER_MIN) + SLIDER_MIN);
+}
 
 // ========== 状态 ==========
 
@@ -135,10 +156,15 @@ function setDisplayMode(modeKey: string): void {
   const mode = DISPLAY_MODES[modeKey];
   if (!mode) return;
 
-  // 更新分段按钮
-  segControl.querySelectorAll(".seg-btn").forEach((btn) => {
-    btn.classList.toggle("active", (btn as HTMLElement).dataset.mode === modeKey);
+  // 更新分段按钮 + 定位 pill
+  const btns = segControl.querySelectorAll(".seg-btn");
+  let activeIndex = 0;
+  btns.forEach((btn, i) => {
+    const isActive = (btn as HTMLElement).dataset.mode === modeKey;
+    btn.classList.toggle("active", isActive);
+    if (isActive) activeIndex = i;
   });
+  segPill.style.transform = `translateX(${activeIndex * 100}%)`;
 
   // 更新描述和预览
   modeDesc.textContent = mode.desc;
@@ -185,7 +211,8 @@ async function init(): Promise<void> {
 
   // 设置辅助力度滑杆
   const assistLevel = configToAssistLevel(config);
-  assistSlider.value = String(assistLevel);
+  currentLevel = assistLevel;
+  updateSliderVisuals(currentLevel);
   assistHint.textContent = ASSIST_HINTS[assistLevel];
 
   // 设置显示方式
@@ -195,6 +222,14 @@ async function init(): Promise<void> {
   // 更新 UI 状态
   updateActionButton();
   updateContentArea();
+
+  // 初始设置完成后开启动画（避免加载时闪动）
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => {
+      sliderContainer.classList.remove("no-transition");
+      segControl.classList.remove("no-transition");
+    });
+  });
 
   // ===== 事件绑定 =====
 
@@ -236,20 +271,35 @@ async function init(): Promise<void> {
     updateContentArea();
   });
 
-  // 辅助力度滑杆 — 拖动时更新提示
-  assistSlider.addEventListener("input", () => {
-    const level = Number(assistSlider.value);
-    assistHint.textContent = ASSIST_HINTS[level];
+  // 辅助力度滑杆 — 点击 & 拖拽
+  let isDragging = false;
+
+  sliderContainer.addEventListener("pointerdown", (e) => {
+    isDragging = true;
+    sliderContainer.setPointerCapture(e.pointerId);
+    const level = getSliderLevelFromX(e.clientX);
+    if (level !== currentLevel) {
+      currentLevel = level;
+      updateSliderVisuals(currentLevel);
+      assistHint.textContent = ASSIST_HINTS[currentLevel];
+    }
   });
 
-  // 辅助力度滑杆 — 松手时保存
-  assistSlider.addEventListener("change", async () => {
-    const level = Number(assistSlider.value);
-    const mapping = ASSIST_TO_CONFIG[level];
-    await sendMessage({
-      type: "updateConfig",
-      config: mapping,
-    });
+  sliderContainer.addEventListener("pointermove", (e) => {
+    if (!isDragging) return;
+    const level = getSliderLevelFromX(e.clientX);
+    if (level !== currentLevel) {
+      currentLevel = level;
+      updateSliderVisuals(currentLevel);
+      assistHint.textContent = ASSIST_HINTS[currentLevel];
+    }
+  });
+
+  sliderContainer.addEventListener("pointerup", async () => {
+    if (!isDragging) return;
+    isDragging = false;
+    const mapping = ASSIST_TO_CONFIG[currentLevel];
+    await sendMessage({ type: "updateConfig", config: mapping });
   });
 
   // 显示方式分段选择器

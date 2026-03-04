@@ -20,12 +20,13 @@ import type {
   WeeklyReportRecord,
   ReviewItemRecord,
   WallpaperRecord,
+  PendingSentenceRecord,
 } from "./types.ts";
 
 // ========== 常量 ==========
 
 export const DB_NAME = "openen-data";
-export const DB_VERSION = 1;
+export const DB_VERSION = 2;
 
 export const STORES = {
   vocab: "vocab",
@@ -37,6 +38,7 @@ export const STORES = {
   weekly_reports: "weekly_reports",
   review_items: "review_items",
   wallpaper_records: "wallpaper_records",
+  pending_sentences: "pending_sentences",
 } as const;
 
 export type StoreName = (typeof STORES)[keyof typeof STORES];
@@ -67,7 +69,8 @@ export function openDB(idb: IDBFactory = indexedDB): Promise<IDBDatabase> {
     request.onupgradeneeded = (event) => {
       const db = request.result;
       const oldVersion = event.oldVersion;
-      migrateSchema(db, oldVersion);
+      const transaction = request.transaction!;
+      migrateSchema(db, oldVersion, transaction);
     };
 
     request.onsuccess = () => {
@@ -100,11 +103,13 @@ export function resetDBInstance(): void {
 
 // ========== Schema 迁移 ==========
 
-function migrateSchema(db: IDBDatabase, oldVersion: number): void {
+function migrateSchema(db: IDBDatabase, oldVersion: number, transaction: IDBTransaction): void {
   if (oldVersion < 1) {
     migrateV1(db);
   }
-  // 未来版本：if (oldVersion < 2) migrateV2(db);
+  if (oldVersion < 2) {
+    migrateV2(db, transaction);
+  }
 }
 
 function migrateV1(db: IDBDatabase): void {
@@ -156,6 +161,21 @@ function migrateV1(db: IDBDatabase): void {
   const wall = db.createObjectStore(STORES.wallpaper_records, { keyPath: "id" });
   wall.createIndex("by_created_at", "created_at");
   wall.createIndex("by_updated_at", "updated_at");
+}
+
+function migrateV2(db: IDBDatabase, transaction: IDBTransaction): void {
+  // pending_sentences
+  const ps = db.createObjectStore(STORES.pending_sentences, { keyPath: "id" });
+  ps.createIndex("by_text", "text", { unique: true });
+  ps.createIndex("by_analyzed", "analyzed");
+  ps.createIndex("by_created_at", "created_at");
+  ps.createIndex("by_source_hostname", "source_hostname");
+  ps.createIndex("by_manual", "manual");
+  ps.createIndex("by_updated_at", "updated_at");
+
+  // 给已有的 learning_records 加 by_sentence 索引
+  const lrStore = transaction.objectStore(STORES.learning_records);
+  lrStore.createIndex("by_sentence", "sentence");
 }
 
 // ========== 通用 CRUD 工具 ==========
@@ -460,6 +480,10 @@ export const learningRecordDAO = {
     await del(db, STORES.learning_records, id);
   },
 
+  async getBySentence(db: IDBDatabase, sentence: string): Promise<LearningRecord | undefined> {
+    return getOneByIndex<LearningRecord>(db, STORES.learning_records, "by_sentence", sentence);
+  },
+
   /** 按时间范围查询（Dashboard 用） */
   async getByDateRange(db: IDBDatabase, startTime: number, endTime: number): Promise<LearningRecord[]> {
     const s = tx(db, STORES.learning_records, "readonly");
@@ -665,5 +689,87 @@ export const wallpaperRecordDAO = {
 
   async delete(db: IDBDatabase, id: string): Promise<void> {
     await del(db, STORES.wallpaper_records, id);
+  },
+};
+
+// ========== PendingSentences ==========
+
+export const pendingSentenceDAO = {
+  async add(
+    db: IDBDatabase,
+    data: Omit<PendingSentenceRecord, "id" | "analyzed" | "created_at" | "updated_at" | "is_dirty">
+  ): Promise<PendingSentenceRecord | null> {
+    // 先查去重
+    const existing = await this.getByText(db, data.text);
+    if (existing) return null;
+
+    const now = Date.now();
+    const record: PendingSentenceRecord = {
+      id: generateId(),
+      analyzed: false,
+      created_at: now,
+      updated_at: now,
+      is_dirty: true,
+      ...data,
+    };
+    await put(db, STORES.pending_sentences, record);
+    return record;
+  },
+
+  async getById(db: IDBDatabase, id: string): Promise<PendingSentenceRecord | undefined> {
+    return getById<PendingSentenceRecord>(db, STORES.pending_sentences, id);
+  },
+
+  async getByText(db: IDBDatabase, text: string): Promise<PendingSentenceRecord | undefined> {
+    return getOneByIndex<PendingSentenceRecord>(db, STORES.pending_sentences, "by_text", text);
+  },
+
+  async getAll(db: IDBDatabase): Promise<PendingSentenceRecord[]> {
+    return getAll<PendingSentenceRecord>(db, STORES.pending_sentences);
+  },
+
+  async getUnanalyzed(db: IDBDatabase): Promise<PendingSentenceRecord[]> {
+    const all = await this.getAll(db);
+    return all
+      .filter(r => !r.analyzed)
+      .sort((a, b) => {
+        // manual 优先
+        if (a.manual !== b.manual) return a.manual ? -1 : 1;
+        // 同类按 created_at desc
+        return b.created_at - a.created_at;
+      });
+  },
+
+  async getPage(
+    db: IDBDatabase,
+    page: number,
+    pageSize: number
+  ): Promise<{ records: PendingSentenceRecord[]; total: number }> {
+    const all = await this.getAll(db);
+    // manual 优先, 然后按 created_at desc
+    all.sort((a, b) => {
+      if (a.manual !== b.manual) return a.manual ? -1 : 1;
+      return b.created_at - a.created_at;
+    });
+    const start = (page - 1) * pageSize;
+    return {
+      records: all.slice(start, start + pageSize),
+      total: all.length,
+    };
+  },
+
+  async markAnalyzed(db: IDBDatabase, id: string): Promise<void> {
+    const existing = await this.getById(db, id);
+    if (!existing) return;
+    await put(db, STORES.pending_sentences, {
+      ...existing,
+      analyzed: true,
+      updated_at: Date.now(),
+      is_dirty: true,
+    });
+  },
+
+  async delete(db: IDBDatabase, id: string): Promise<void> {
+    await del(db, STORES.pending_sentences, id);
   },
 };

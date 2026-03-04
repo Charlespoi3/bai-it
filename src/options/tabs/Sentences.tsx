@@ -1,12 +1,13 @@
 import { useState } from "react";
-import type { LearningRecord, PatternKey } from "../../shared/types.ts";
+import type { LearningRecord, PatternKey, PendingSentenceRecord } from "../../shared/types.ts";
 import { GlassCard } from "../components/GlassCard.tsx";
 import { PatternTag } from "../components/PatternTag.tsx";
 import { ChunkLines } from "../components/ChunkLines.tsx";
 import { FilterChip } from "../components/FilterChip.tsx";
 import { VocabPill } from "../components/VocabPill.tsx";
 import { EmptyState } from "../components/EmptyState.tsx";
-import { useSentences } from "../hooks/useSentences.ts";
+import { useSentences, type SentenceItem } from "../hooks/useSentences.ts";
+import { useMasteredWords } from "../hooks/useMasteredWords.ts";
 import { PATTERN_LABELS } from "../constants.ts";
 
 function formatTimeAgo(timestamp: number): string {
@@ -30,6 +31,8 @@ function extractDomain(url?: string): string {
   }
 }
 
+// ========== Analyzed (existing) ==========
+
 function SentenceCollapsed({ record, onClick }: { record: LearningRecord; onClick: () => void }) {
   return (
     <GlassCard className="sent-item" onClick={onClick}>
@@ -52,6 +55,8 @@ function SentenceCollapsed({ record, onClick }: { record: LearningRecord; onClic
 }
 
 function SentenceExpanded({ record, onClick }: { record: LearningRecord; onClick: () => void }) {
+  const { masteredWords, toggleMastered } = useMasteredWords();
+
   return (
     <GlassCard className="sent-expanded" onClick={onClick}>
       <div className="sent-item-top">
@@ -93,7 +98,13 @@ function SentenceExpanded({ record, onClick }: { record: LearningRecord; onClick
           <div className="sent-section-label">生词</div>
           <div className="sent-vocab-row">
             {record.new_words.map((w, i) => (
-              <VocabPill key={i} word={w.word} definition={w.definition} />
+              <VocabPill
+                key={i}
+                word={w.word}
+                definition={w.definition}
+                mastered={masteredWords.has(w.word.toLowerCase())}
+                onToggleMastered={() => toggleMastered(w.word)}
+              />
             ))}
           </div>
         </>
@@ -102,10 +113,90 @@ function SentenceExpanded({ record, onClick }: { record: LearningRecord; onClick
   );
 }
 
+// ========== Pending ==========
+
+function SentencePending({
+  pending,
+  analyzing,
+  error,
+  onClick,
+}: {
+  pending: PendingSentenceRecord;
+  analyzing: boolean;
+  error?: string;
+  onClick: () => void;
+}) {
+  return (
+    <GlassCard className="sent-item sent-pending" onClick={onClick}>
+      <div className="sent-item-top">
+        {pending.manual && <span className="sent-badge sent-badge-manual">手动</span>}
+        {analyzing && <span className="sent-badge sent-badge-analyzing">分析中...</span>}
+        {error && <span className="sent-badge sent-badge-error">分析失败</span>}
+        <span className="sentence-source">
+          {pending.source_hostname} · {formatTimeAgo(pending.created_at)}
+        </span>
+      </div>
+      <div className="sent-item-text">{pending.text}</div>
+      {pending.new_words.length > 0 && (
+        <div className="sent-item-meta">
+          <span className="sent-item-vocab-count">{pending.new_words.length} 生词</span>
+        </div>
+      )}
+    </GlassCard>
+  );
+}
+
+function SentencePendingExpanded({
+  pending,
+  analyzing,
+  error,
+  onClick,
+}: {
+  pending: PendingSentenceRecord;
+  analyzing: boolean;
+  error?: string;
+  onClick: () => void;
+}) {
+  return (
+    <GlassCard className="sent-expanded sent-pending" onClick={onClick}>
+      <div className="sent-item-top">
+        {pending.manual && <span className="sent-badge sent-badge-manual">手动</span>}
+        {analyzing && <span className="sent-badge sent-badge-analyzing">分析中...</span>}
+        {error && <span className="sent-badge sent-badge-error">分析失败</span>}
+        <span className="sentence-source">
+          {pending.source_hostname} · {formatTimeAgo(pending.created_at)}
+        </span>
+      </div>
+
+      <div className="sent-expanded-original">{pending.text}</div>
+
+      {analyzing && (
+        <div className="sent-skeleton-container">
+          <div className="sent-section-label">分块</div>
+          <div className="sent-skeleton" />
+          <div className="sent-section-label">为什么难读</div>
+          <div className="sent-skeleton sent-skeleton-wide" />
+          <div className="sent-section-label">学会表达</div>
+          <div className="sent-skeleton sent-skeleton-wide" />
+        </div>
+      )}
+
+      {error && (
+        <div className="sent-error-msg">分析失败：{error}</div>
+      )}
+
+      {!analyzing && !error && (
+        <div className="sent-pending-hint">等待分析...</div>
+      )}
+    </GlassCard>
+  );
+}
+
 function formatExpression(text: string): string {
-  // Bold text between ** markers
   return text.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>").replace(/\n/g, "<br>");
 }
+
+// ========== Main Component ==========
 
 interface SentencesProps {
   db: IDBDatabase | null;
@@ -113,14 +204,20 @@ interface SentencesProps {
 }
 
 export function Sentences({ db, isExample }: SentencesProps) {
-  const { records, filter, setFilter, availablePatterns, loading } = useSentences(db, isExample);
+  const {
+    items, filter, setFilter, availablePatterns, loading,
+    page, setPage, totalPages, hasNextPage, hasPrevPage,
+  } = useSentences(db, isExample);
   const [expandedId, setExpandedId] = useState<string | null>(null);
 
   if (loading) return null;
 
-  if (records.length === 0 && filter === "all") {
+  if (items.length === 0 && filter === "all") {
     return <EmptyState text="还没积累难句，去浏览英文网页，遇到的难句会自动攒在这" />;
   }
+
+  const getItemId = (item: SentenceItem) =>
+    item.type === "analyzed" ? item.record.id : item.pending.id;
 
   return (
     <>
@@ -142,18 +239,62 @@ export function Sentences({ db, isExample }: SentencesProps) {
       </div>
 
       {/* Sentence list */}
-      {records.map((record) => (
-        <div key={record.id} className="rv">
-          {expandedId === record.id ? (
-            <SentenceExpanded record={record} onClick={() => setExpandedId(null)} />
-          ) : (
-            <SentenceCollapsed record={record} onClick={() => setExpandedId(record.id)} />
-          )}
-        </div>
-      ))}
+      {items.map((item) => {
+        const id = getItemId(item);
+        const isExpanded = expandedId === id;
 
-      {records.length === 0 && filter !== "all" && (
+        return (
+          <div key={id} className="rv">
+            {item.type === "analyzed" ? (
+              isExpanded ? (
+                <SentenceExpanded record={item.record} onClick={() => setExpandedId(null)} />
+              ) : (
+                <SentenceCollapsed record={item.record} onClick={() => setExpandedId(id)} />
+              )
+            ) : (
+              isExpanded ? (
+                <SentencePendingExpanded
+                  pending={item.pending}
+                  analyzing={item.analyzing}
+                  error={item.error}
+                  onClick={() => setExpandedId(null)}
+                />
+              ) : (
+                <SentencePending
+                  pending={item.pending}
+                  analyzing={item.analyzing}
+                  error={item.error}
+                  onClick={() => setExpandedId(id)}
+                />
+              )
+            )}
+          </div>
+        );
+      })}
+
+      {items.length === 0 && filter !== "all" && (
         <EmptyState text={`没有「${PATTERN_LABELS[filter as PatternKey] ?? filter}」类型的难句`} />
+      )}
+
+      {/* Pagination */}
+      {totalPages > 1 && (
+        <div className="sent-pagination rv">
+          <button
+            className="sent-page-btn"
+            disabled={!hasPrevPage}
+            onClick={() => setPage(p => p - 1)}
+          >
+            ← 上一页
+          </button>
+          <span className="sent-page-info">{page} / {totalPages}</span>
+          <button
+            className="sent-page-btn"
+            disabled={!hasNextPage}
+            onClick={() => setPage(p => p + 1)}
+          >
+            下一页 →
+          </button>
+        </div>
       )}
     </>
   );

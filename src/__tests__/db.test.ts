@@ -5,6 +5,7 @@ import {
   closeDB,
   resetDBInstance,
   DB_NAME,
+  DB_VERSION,
   STORES,
   vocabDAO,
   vocabContextDAO,
@@ -15,6 +16,7 @@ import {
   weeklyReportDAO,
   reviewItemDAO,
   wallpaperRecordDAO,
+  pendingSentenceDAO,
 } from "../shared/db";
 
 let db: IDBDatabase;
@@ -33,9 +35,9 @@ afterEach(() => {
 // ========== Schema ==========
 
 describe("Schema 创建", () => {
-  it("创建了 9 张表", () => {
+  it("创建了 10 张表", () => {
     const names = Array.from(db.objectStoreNames);
-    expect(names).toHaveLength(9);
+    expect(names).toHaveLength(10);
     for (const store of Object.values(STORES)) {
       expect(names).toContain(store);
     }
@@ -662,6 +664,247 @@ describe("wallpaper_records CRUD", () => {
     await wallpaperRecordDAO.delete(db, r.id);
     const all = await wallpaperRecordDAO.getAll(db);
     expect(all).toHaveLength(0);
+  });
+});
+
+// ========== PendingSentences ==========
+
+describe("pending_sentences CRUD", () => {
+  it("添加待分析句子", async () => {
+    const record = await pendingSentenceDAO.add(db, {
+      text: "The algorithm that powers the recommendation engine uses collaborative filtering.",
+      source_url: "https://example.com/article",
+      source_hostname: "example.com",
+      manual: false,
+      new_words: ["collaborative", "filtering"],
+    });
+    expect(record).not.toBeNull();
+    expect(record!.id).toBeTruthy();
+    expect(record!.analyzed).toBe(false);
+    expect(record!.manual).toBe(false);
+    expect(record!.new_words).toEqual(["collaborative", "filtering"]);
+  });
+
+  it("去重：相同文本返回 null", async () => {
+    const text = "Duplicate sentence for testing.";
+    const first = await pendingSentenceDAO.add(db, {
+      text,
+      source_url: "https://a.com",
+      source_hostname: "a.com",
+      manual: false,
+      new_words: [],
+    });
+    expect(first).not.toBeNull();
+
+    const second = await pendingSentenceDAO.add(db, {
+      text,
+      source_url: "https://b.com",
+      source_hostname: "b.com",
+      manual: true,
+      new_words: ["test"],
+    });
+    expect(second).toBeNull();
+  });
+
+  it("getByText 按唯一索引查找", async () => {
+    const text = "Unique sentence here.";
+    await pendingSentenceDAO.add(db, {
+      text,
+      source_url: "https://example.com",
+      source_hostname: "example.com",
+      manual: false,
+      new_words: [],
+    });
+
+    const found = await pendingSentenceDAO.getByText(db, text);
+    expect(found).toBeDefined();
+    expect(found!.text).toBe(text);
+
+    const notFound = await pendingSentenceDAO.getByText(db, "nonexistent");
+    expect(notFound).toBeUndefined();
+  });
+
+  it("getUnanalyzed 返回未分析记录，manual 优先", async () => {
+    await pendingSentenceDAO.add(db, {
+      text: "Auto sentence 1",
+      source_url: "https://a.com",
+      source_hostname: "a.com",
+      manual: false,
+      new_words: [],
+    });
+    await pendingSentenceDAO.add(db, {
+      text: "Manual sentence",
+      source_url: "https://b.com",
+      source_hostname: "b.com",
+      manual: true,
+      new_words: [],
+    });
+    await pendingSentenceDAO.add(db, {
+      text: "Auto sentence 2",
+      source_url: "https://c.com",
+      source_hostname: "c.com",
+      manual: false,
+      new_words: [],
+    });
+
+    const unanalyzed = await pendingSentenceDAO.getUnanalyzed(db);
+    expect(unanalyzed).toHaveLength(3);
+    // manual first
+    expect(unanalyzed[0].manual).toBe(true);
+    expect(unanalyzed[0].text).toBe("Manual sentence");
+  });
+
+  it("markAnalyzed 标记已分析", async () => {
+    const record = await pendingSentenceDAO.add(db, {
+      text: "To be analyzed.",
+      source_url: "https://example.com",
+      source_hostname: "example.com",
+      manual: false,
+      new_words: [],
+    });
+
+    await pendingSentenceDAO.markAnalyzed(db, record!.id);
+    const updated = await pendingSentenceDAO.getById(db, record!.id);
+    expect(updated!.analyzed).toBe(true);
+
+    // 不再出现在 unanalyzed 列表
+    const unanalyzed = await pendingSentenceDAO.getUnanalyzed(db);
+    expect(unanalyzed).toHaveLength(0);
+  });
+
+  it("getPage 分页", async () => {
+    for (let i = 0; i < 5; i++) {
+      await pendingSentenceDAO.add(db, {
+        text: `Sentence ${i}`,
+        source_url: "https://example.com",
+        source_hostname: "example.com",
+        manual: i === 2, // 第 3 条是 manual
+        new_words: [],
+      });
+    }
+
+    const page1 = await pendingSentenceDAO.getPage(db, 1, 2);
+    expect(page1.total).toBe(5);
+    expect(page1.records).toHaveLength(2);
+    // manual 排第一
+    expect(page1.records[0].manual).toBe(true);
+
+    const page2 = await pendingSentenceDAO.getPage(db, 2, 2);
+    expect(page2.records).toHaveLength(2);
+
+    const page3 = await pendingSentenceDAO.getPage(db, 3, 2);
+    expect(page3.records).toHaveLength(1);
+  });
+
+  it("delete 删除", async () => {
+    const record = await pendingSentenceDAO.add(db, {
+      text: "To be deleted.",
+      source_url: "https://example.com",
+      source_hostname: "example.com",
+      manual: false,
+      new_words: [],
+    });
+    await pendingSentenceDAO.delete(db, record!.id);
+    const found = await pendingSentenceDAO.getById(db, record!.id);
+    expect(found).toBeUndefined();
+  });
+});
+
+// ========== Schema v1→v2 升级 ==========
+
+describe("Schema v1→v2 升级", () => {
+  it("v1 数据库升级到 v2：旧数据不丢 + 新表存在", async () => {
+    // 先关闭当前 v2 数据库
+    closeDB();
+    indexedDB.deleteDatabase(DB_NAME);
+
+    // 手动创建 v1 数据库
+    const v1db = await new Promise<IDBDatabase>((resolve, reject) => {
+      const req = indexedDB.open(DB_NAME, 1);
+      req.onupgradeneeded = () => {
+        const d = req.result;
+        // 只建 v1 的 9 张表（简化版：只建几张关键的）
+        const vocab = d.createObjectStore("vocab", { keyPath: "id" });
+        vocab.createIndex("by_word", "word", { unique: true });
+        vocab.createIndex("by_status", "status");
+        vocab.createIndex("by_updated_at", "updated_at");
+
+        d.createObjectStore("vocab_contexts", { keyPath: "id" })
+          .createIndex("by_vocab_id", "vocab_id");
+        d.createObjectStore("patterns", { keyPath: "id" })
+          .createIndex("by_key", "key", { unique: true });
+        d.createObjectStore("pattern_examples", { keyPath: "id" })
+          .createIndex("by_pattern_id", "pattern_id");
+
+        const lr = d.createObjectStore("learning_records", { keyPath: "id" });
+        lr.createIndex("by_created_at", "created_at");
+        lr.createIndex("by_pattern_key", "pattern_key");
+        lr.createIndex("by_source_url", "source_url");
+        lr.createIndex("by_updated_at", "updated_at");
+
+        d.createObjectStore("settings", { keyPath: "key" });
+        d.createObjectStore("weekly_reports", { keyPath: "id" });
+        d.createObjectStore("review_items", { keyPath: "id" });
+        d.createObjectStore("wallpaper_records", { keyPath: "id" });
+      };
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => reject(req.error);
+    });
+
+    // 写入一条 v1 数据
+    const txn = v1db.transaction("vocab", "readwrite");
+    txn.objectStore("vocab").put({
+      id: "test-v1",
+      word: "legacy",
+      status: "new",
+      encounter_count: 1,
+      first_seen_at: Date.now(),
+      updated_at: Date.now(),
+      is_dirty: true,
+    });
+    await new Promise<void>((resolve) => { txn.oncomplete = () => resolve(); });
+    v1db.close();
+
+    // 用 openDB 触发 v1→v2 升级
+    resetDBInstance();
+    db = await openDB(indexedDB);
+
+    // 旧数据不丢
+    const vocab = await vocabDAO.getByWord(db, "legacy");
+    expect(vocab).toBeDefined();
+    expect(vocab!.word).toBe("legacy");
+
+    // 新表存在
+    const names = Array.from(db.objectStoreNames);
+    expect(names).toContain("pending_sentences");
+
+    // learning_records 有新的 by_sentence 索引
+    const lrTx = db.transaction("learning_records", "readonly");
+    const lrStore = lrTx.objectStore("learning_records");
+    expect(Array.from(lrStore.indexNames)).toContain("by_sentence");
+  });
+});
+
+// ========== learningRecordDAO.getBySentence ==========
+
+describe("learningRecordDAO.getBySentence", () => {
+  it("按 sentence 查找", async () => {
+    const sentence = "The quick brown fox jumps over the lazy dog.";
+    await learningRecordDAO.add(db, {
+      sentence,
+      chunked: sentence,
+      new_words: [],
+      source_url: "https://example.com",
+    });
+
+    const found = await learningRecordDAO.getBySentence(db, sentence);
+    expect(found).toBeDefined();
+    expect(found!.sentence).toBe(sentence);
+  });
+
+  it("未找到返回 undefined", async () => {
+    const found = await learningRecordDAO.getBySentence(db, "nonexistent sentence");
+    expect(found).toBeUndefined();
   });
 });
 

@@ -5,7 +5,7 @@
  * 在 Service Worker 中运行，直接调用 LLM API。
  */
 
-import type { LLMConfig, ChunkResult } from "./types.ts";
+import type { LLMConfig, ChunkResult, FullAnalysisResult } from "./types.ts";
 
 // ========== Prompt 构建 ==========
 
@@ -287,4 +287,157 @@ export async function chunkSentences(
     const items = parseOpenAIResponse(responseData);
     return mapToChunkResults(sentences, items);
   }
+}
+
+// ========== 完整分析（单句，给管理端用） ==========
+
+const VALID_PATTERN_KEYS = [
+  "insertion", "background_first", "nested", "long_list", "inverted",
+  "long_subject", "omission", "contrast", "condition", "long_modifier", "other",
+];
+
+export function buildFullAnalysisPrompt(sentence: string): string {
+  return `You are an English reading assistant for Chinese learners. Analyze the following English sentence in depth.
+
+## Input sentence
+
+${sentence}
+
+## Output format
+
+Return a single JSON object (NOT an array) with these fields:
+
+\`\`\`json
+{
+  "chunked": "the chunked version with\\n  indentation",
+  "pattern_key": "one of the allowed keys",
+  "sentence_analysis": "用中文解释这句话为什么难读，指出哪些结构造成了阅读障碍",
+  "expression_tips": "用中文讲解这句话中值得学习的表达方式和句式，用 **加粗** 标注关键表达",
+  "new_words": [{"word": "example", "definition": "例子，实例"}],
+  "is_worth_practicing": true
+}
+\`\`\`
+
+## Rules
+
+### chunked
+- Main clause (subject-verb-object) at top level (no indentation)
+- Indent subordinate elements with 2 spaces per level
+- Preserve original text exactly, only add \\n and spaces
+
+### pattern_key
+Must be one of: ${VALID_PATTERN_KEYS.join(", ")}
+
+### sentence_analysis & expression_tips
+- Write in Chinese (中文)
+- Be concise but insightful
+
+### new_words
+- Only words that a IELTS 7+ Chinese reader might not know
+- Do NOT mark proper nouns, brand names, common tech terms
+- Provide brief Chinese definitions
+
+### is_worth_practicing
+- true if the sentence has interesting structure worth studying
+- false if it's straightforward despite being long
+
+Return valid JSON only, no markdown fences.`;
+}
+
+/**
+ * 解析单条完整分析结果 JSON
+ */
+export function parseFullAnalysisJson(text: string): FullAnalysisResult {
+  let cleaned = text.trim();
+  const fenceMatch = cleaned.match(/```(?:json)?\s*([\s\S]*?)```/);
+  if (fenceMatch) {
+    cleaned = fenceMatch[1].trim();
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(cleaned);
+  } catch {
+    throw new Error(`LLM 返回的 JSON 格式无效: ${cleaned.slice(0, 100)}...`);
+  }
+
+  const obj = parsed as Record<string, unknown>;
+
+  // 验证 pattern_key
+  let patternKey = String(obj.pattern_key || "other");
+  if (!VALID_PATTERN_KEYS.includes(patternKey)) {
+    patternKey = "other";
+  }
+
+  return {
+    chunked: String(obj.chunked || ""),
+    pattern_key: patternKey,
+    sentence_analysis: String(obj.sentence_analysis || ""),
+    expression_tips: String(obj.expression_tips || ""),
+    new_words: Array.isArray(obj.new_words)
+      ? (obj.new_words as { word: string; definition: string }[]).map(w => ({
+          word: String(w.word || ""),
+          definition: String(w.definition || ""),
+        }))
+      : [],
+    is_worth_practicing: Boolean(obj.is_worth_practicing),
+  };
+}
+
+/**
+ * 提取 LLM 响应文本（Gemini 或 OpenAI 格式）
+ */
+function extractResponseText(data: unknown, format: "gemini" | "openai-compatible"): string {
+  if (format === "gemini") {
+    const response = data as { candidates?: { content?: { parts?: { text?: string }[] } }[] };
+    const text = response?.candidates?.[0]?.content?.parts?.[0]?.text;
+    if (!text) throw new Error("Gemini 返回了空响应");
+    return text;
+  } else {
+    const response = data as { choices?: { message?: { content?: string } }[] };
+    const text = response?.choices?.[0]?.message?.content;
+    if (!text) throw new Error("OpenAI 返回了空响应");
+    return text;
+  }
+}
+
+/**
+ * 对单句进行完整 LLM 分析（句式、分块、讲解、表达、生词）
+ */
+export async function analyzeSentenceFull(
+  sentence: string,
+  config: LLMConfig
+): Promise<FullAnalysisResult> {
+  const prompt = buildFullAnalysisPrompt(sentence);
+
+  let responseData: unknown;
+
+  if (config.format === "gemini") {
+    const { url, body } = buildGeminiRequest(prompt, config);
+    const response = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`Gemini API 错误 (${response.status}): ${errorText.slice(0, 200)}`);
+    }
+    responseData = await response.json();
+  } else {
+    const { url, body, headers } = buildOpenAIRequest(prompt, config);
+    const response = await fetch(url, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(body),
+    });
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`OpenAI API 错误 (${response.status}): ${errorText.slice(0, 200)}`);
+    }
+    responseData = await response.json();
+  }
+
+  const text = extractResponseText(responseData, config.format);
+  return parseFullAnalysisJson(text);
 }

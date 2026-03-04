@@ -106,13 +106,17 @@ export type Message =
   | { type: "toggleSite"; hostname: string }
   | { type: "pauseTab"; tabId: number }
   | { type: "resumeTab"; tabId: number }
-  | { type: "getTabState"; tabId: number; hostname: string };
+  | { type: "getTabState"; tabId: number; hostname: string }
+  | { type: "saveSentence"; text: string; source_url: string; source_hostname: string; manual: boolean; new_words: string[] }
+  | { type: "analyzeSentences"; sentenceIds: string[] };
 
 export type BackgroundMessage =
   | { type: "activate" }
   | { type: "deactivate" }
   | { type: "pause" }
-  | { type: "resume" };
+  | { type: "resume" }
+  | { type: "sentenceAnalyzed"; pendingId: string; learningRecord: LearningRecord }
+  | { type: "sentenceAnalysisFailed"; pendingId: string; error: string };
 
 // ========== 分块结果 ==========
 
@@ -135,7 +139,18 @@ export interface CacheEntry {
 
 export const CACHE_TTL = 7 * 24 * 60 * 60 * 1000; // 7 天
 
-// ========== IndexedDB 数据层（9 张表） ==========
+// ========== LLM 完整分析结果 ==========
+
+export interface FullAnalysisResult {
+  chunked: string;
+  pattern_key: string;
+  sentence_analysis: string;
+  expression_tips: string;
+  new_words: { word: string; definition: string }[];
+  is_worth_practicing: boolean;
+}
+
+// ========== IndexedDB 数据层（10 张表） ==========
 
 /** 生词状态 */
 export type VocabStatus = "new" | "learning" | "mastered";
@@ -265,6 +280,20 @@ export interface WallpaperRecord {
   sentence: string;
   image_data?: string; // base64 或 blob URL
   style?: string;
+  created_at: number;
+  updated_at: number;
+  is_dirty: boolean;
+}
+
+/** pending_sentences — 待分析句子（浏览时静默采集） */
+export interface PendingSentenceRecord {
+  id: string; // UUID
+  text: string;
+  source_url: string;
+  source_hostname: string;
+  manual: boolean;
+  new_words: string[]; // 只存词，不存释义（释义后续由 LLM 给）
+  analyzed: boolean;
   created_at: number;
   updated_at: number;
   is_dirty: boolean;

@@ -1,10 +1,10 @@
-import { useState, useCallback } from "react";
+import { useState } from "react";
 import { GlassCard } from "../components/GlassCard.tsx";
 import { ChunkLines } from "../components/ChunkLines.tsx";
 import { BreakPointSentence } from "../components/BreakPointSentence.tsx";
 import { EmptyState } from "../components/EmptyState.tsx";
 import { useReviewData } from "../hooks/useReviewData.ts";
-import { vocabDAO } from "../../shared/db.ts";
+import { useMasteredWords } from "../hooks/useMasteredWords.ts";
 
 interface DailyReviewProps {
   db: IDBDatabase | null;
@@ -13,26 +13,9 @@ interface DailyReviewProps {
 
 export function DailyReview({ db, isExample }: DailyReviewProps) {
   const { practiseSentence, todayVocab, weekSentenceCount, loading } = useReviewData(db, isExample);
+  const { masteredWords, toggleMastered } = useMasteredWords();
   const [breakCount, setBreakCount] = useState(0);
   const [showAnswer, setShowAnswer] = useState(false);
-  const [masteredIds, setMasteredIds] = useState<Set<string>>(new Set());
-
-  const handleToggleMastered = useCallback(async (vocabId: string) => {
-    if (isExample || !db) return;
-    const vocab = await vocabDAO.getById(db, vocabId);
-    if (!vocab) return;
-    const newStatus = vocab.status === "mastered" ? "new" : "mastered";
-    await vocabDAO.update(db, vocabId, {
-      status: newStatus as "new" | "learning" | "mastered",
-      mastered_at: newStatus === "mastered" ? Date.now() : undefined,
-    });
-    setMasteredIds((prev) => {
-      const next = new Set(prev);
-      if (newStatus === "mastered") next.add(vocabId);
-      else next.delete(vocabId);
-      return next;
-    });
-  }, [db, isExample]);
 
   if (loading) return null;
 
@@ -60,13 +43,13 @@ export function DailyReview({ db, isExample }: DailyReviewProps) {
       {hasSentence && (
         <div className="rv">
           <div className="sub-label">断句练习</div>
-          <GlassCard className="learn-sentence" style={{ marginBottom: 14 }}>
+          <GlassCard className="learn-sentence">
             <BreakPointSentence
               sentence={practiseSentence.sentence}
               onBreakCountChange={setBreakCount}
             />
           </GlassCard>
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 44 }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: 16, marginBottom: 44 }}>
             <div style={{ fontSize: 12, color: "rgba(255,255,255,0.15)" }}>
               凭语感断，不用想语法 · 断了 {breakCount} 处
             </div>
@@ -101,7 +84,7 @@ export function DailyReview({ db, isExample }: DailyReviewProps) {
           <div className="sub-label">今天掰过的词</div>
           <div className="review-vocab-grid">
             {todayVocab.map((v) => {
-              const isMastered = v.status === "mastered" || masteredIds.has(v.id);
+              const isMastered = v.status === "mastered" || masteredWords.has(v.word.toLowerCase());
               return (
                 <GlassCard key={v.id} className="review-vocab-item">
                   <div className="review-vocab-top">
@@ -111,7 +94,7 @@ export function DailyReview({ db, isExample }: DailyReviewProps) {
                   <div className="review-vocab-def">{v.definition || v.industry_definition || ""}</div>
                   <button
                     className="review-vocab-mastered"
-                    onClick={() => handleToggleMastered(v.id)}
+                    onClick={() => toggleMastered(v.word)}
                     type="button"
                   >
                     {isMastered ? "✓ 已掌握" : "标记掌握"}

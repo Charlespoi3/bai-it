@@ -9,10 +9,11 @@
  * 5. 管理配置和站点开关
  */
 
-import type { Message, BaitConfig, ChunkResult } from "../shared/types.ts";
+import type { Message, BaitConfig, ChunkResult, PatternKey } from "../shared/types.ts";
 import { DEFAULT_CONFIG, resolveLLMConfig, migrateLLMConfig } from "../shared/types.ts";
 import { getCachedBatch, setCacheBatch } from "../shared/cache.ts";
-import { chunkSentences } from "../shared/llm-adapter.ts";
+import { chunkSentences, analyzeSentenceFull } from "../shared/llm-adapter.ts";
+import { openDB as openDataDB, pendingSentenceDAO, learningRecordDAO } from "../shared/db.ts";
 
 // ========== 配置管理 ==========
 
@@ -194,6 +195,80 @@ async function updateDailyStats(chunkedCount: number): Promise<void> {
   }
 }
 
+// ========== IndexedDB 连接 ==========
+
+let bgDb: IDBDatabase | null = null;
+
+async function getDB(): Promise<IDBDatabase> {
+  if (bgDb) return bgDb;
+  bgDb = await openDataDB();
+  bgDb.onclose = () => { bgDb = null; };
+  return bgDb;
+}
+
+// ========== 分析批处理 ==========
+
+async function processAnalysisBatch(sentenceIds: string[]): Promise<void> {
+  const db = await getDB();
+  const config = await getConfig();
+  const llmConfig = resolveLLMConfig(config.llm);
+
+  if (!llmConfig.apiKey) return;
+
+  for (let i = 0; i < sentenceIds.length; i++) {
+    const id = sentenceIds[i];
+
+    try {
+      const pending = await pendingSentenceDAO.getById(db, id);
+      if (!pending || pending.analyzed) continue;
+
+      // 防止 service worker 重启导致重复分析
+      const existing = await learningRecordDAO.getBySentence(db, pending.text);
+      if (existing) {
+        await pendingSentenceDAO.markAnalyzed(db, id);
+        chrome.runtime.sendMessage({
+          type: "sentenceAnalyzed",
+          pendingId: id,
+          learningRecord: existing,
+        }).catch(() => {});
+        continue;
+      }
+
+      const result = await analyzeSentenceFull(pending.text, llmConfig);
+
+      const lr = await learningRecordDAO.add(db, {
+        sentence: pending.text,
+        chunked: result.chunked,
+        sentence_analysis: result.sentence_analysis,
+        expression_tips: result.expression_tips,
+        pattern_key: result.pattern_key as PatternKey,
+        new_words: result.new_words,
+        source_url: pending.source_url,
+        llm_provider: config.llm.activeProvider,
+      });
+
+      await pendingSentenceDAO.markAnalyzed(db, id);
+
+      chrome.runtime.sendMessage({
+        type: "sentenceAnalyzed",
+        pendingId: id,
+        learningRecord: lr,
+      }).catch(() => {});
+    } catch (err) {
+      chrome.runtime.sendMessage({
+        type: "sentenceAnalysisFailed",
+        pendingId: id,
+        error: err instanceof Error ? err.message : "Unknown error",
+      }).catch(() => {});
+    }
+
+    // 每条之间加 500ms 间隔，避免 API 限流
+    if (i < sentenceIds.length - 1) {
+      await new Promise(resolve => setTimeout(resolve, 500));
+    }
+  }
+}
+
 // ========== 消息监听 ==========
 
 chrome.runtime.onMessage.addListener(
@@ -301,6 +376,29 @@ async function handleMessage(
 
     case "updateConfig":
       return updateConfig(message.config);
+
+    case "saveSentence": {
+      try {
+        const db = await getDB();
+        const record = await pendingSentenceDAO.add(db, {
+          text: message.text,
+          source_url: message.source_url,
+          source_hostname: message.source_hostname,
+          manual: message.manual,
+          new_words: message.new_words,
+        });
+        return { ok: true, saved: record !== null };
+      } catch {
+        return { ok: true, saved: false };
+      }
+    }
+
+    case "analyzeSentences": {
+      const { sentenceIds } = message;
+      // 立即返回，异步处理
+      processAnalysisBatch(sentenceIds).catch(() => {});
+      return { ok: true };
+    }
 
     default:
       return { error: "Unknown message type" };

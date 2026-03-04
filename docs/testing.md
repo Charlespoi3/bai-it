@@ -212,41 +212,57 @@ python3 tests/acceptance/deep-read.py   # 细读模式验收
 | 视觉还原对比 | Claude for Chrome | 将 Options 页截图与 `playground-pages.html` 对应 Tab 截图对比，确认配色/字体/布局/组件还原度 |
 | 动效体感 | 人工确认 | 入场动画、Tab 切换、按钮 hover 流畅自然 |
 
-### 管理端示例数据 + 提示条
+### 管理端引导系统（v2）
 
-#### 状态切换逻辑
+> 核心变更：isExample 从全局统一改为 per-tab 独立控制。总览基于「是否有任何数据（pending 或 analyzed）」，每日回味/难句集基于「是否有已分析数据」。
 
-| 验收项 | 类型 | 通过标准 |
-|--------|------|----------|
-| 无 key 显示示例数据 | Puppeteer | 未配置 API key → 总览/每日回味/难句集三个 Tab 均显示示例数据（硬编码），统计数字为 23/47/12 |
-| 无 key 显示提示条 | Puppeteer | 总览 Tab 顶部出现提示条，包含文案「以下是示例数据…」和「去设置 →」按钮 |
-| 无 key 提示条跳转 | Puppeteer | 点击「去设置 →」→ 切换到设置 Tab |
-| 有 key 无数据显示示例数据 | Puppeteer | 配置 API key 后、无 learning_records → 仍显示示例数据 |
-| 有 key 无数据提示条文案 | Puppeteer | 提示条文案变为「以下是示例数据。去浏览几篇英文网页…」，无「去设置」按钮 |
-| 设置 Tab 无提示条 | Puppeteer | 切换到设置 Tab → 提示条不显示 |
-| 设置 Tab 始终可操作 | Puppeteer | 无论什么状态，设置 Tab 的 API key 输入框、Provider 按钮、保存按钮均可操作 |
-| 有数据切换到真实数据 | Puppeteer | IndexedDB learning_records 有 ≥1 条记录 → 所有 Tab 显示真实数据，提示条消失 |
-
-#### 示例数据内容
+#### 总览（Dashboard）
 
 | 验收项 | 类型 | 通过标准 |
 |--------|------|----------|
-| 总览统计卡片 | Puppeteer | 显示 23 难句 / 47 生词 / 12 已掌握 |
-| 总览示例句子 | Puppeteer | 展示 3 条句子，句式标签分别为「插入补充」「层层嵌套」「对比转折」 |
-| 总览句子分块 | Puppeteer | 每条句子有缩进分块展示 + 生词红色虚线标注 |
-| 每日回味断句练习 | Puppeteer | 显示断句裸句（自动驾驶句），可点击插入断点 |
-| 每日回味高频词 | Puppeteer | 3 个词汇卡片：autonomous / coherent / photorealistic |
-| 每日回味周统计 | Puppeteer | 显示「这周掰了 15 句」 |
-| 难句集筛选标签 | Puppeteer | 显示 6 个筛选 chip（全部 + 5 种句式） |
-| 难句集 5 条句子 | Puppeteer | 5 条收起状态的句子卡片，覆盖 5 种句式 |
+| 无数据 → 示例 + 浏览引导 | 浏览器验收 | 无 pending + 无 learning_records → 展示示例数据（23/47/12）+ banner「以下是示例数据。去浏览几篇英文网页，你的学习数据就会出现在这里。」 |
+| 有 pending → 切换真实数据 | 浏览器验收 | 有 pending_sentences → 统计卡片显示真实数字（难句数含 pending），示例消失 |
+| 有 pending + 无 API 温和引导 | 浏览器验收 | pending_count > 0 且无 API key → 底部出现引导条「你有 X 个句子等待深度分析，配置 API 后自动解锁句型分析和结构化复习」+ 可点击链接跳转设置 |
+| 有 pending + 有 API 无引导 | 浏览器验收 | pending_count > 0 且已配置 API → 不显示引导条 |
+| 有已分析数据正常展示 | 浏览器验收 | learning_records > 0 → 统计卡片 + 最近难句列表正常展示 |
+| 总览 isExample 逻辑 | 单元测试 | isExample = (pending_count === 0 && analyzed_count === 0)，即有任何数据就切换到真实 |
 
-#### 提示条视觉
+#### 每日回味 / 难句集 — 基于「已分析数据」判断
 
 | 验收项 | 类型 | 通过标准 |
 |--------|------|----------|
-| 提示条位置 | Puppeteer | 在导航栏下方、内容模块上方（非页面底部） |
-| 提示条样式 | Puppeteer 样式断言 | 左侧 3px 红色竖线（`border-left`），背景 `rgba(239,68,68,0.04)`，与毛玻璃卡片视觉区分明显 |
-| 视觉还原对比 | 人工确认 | 对比 `playground-onboarding.html` 原型，提示条位置/样式/文案一致 |
+| 无已分析 + 无 API → 示例 + API 引导 | 浏览器验收 | learning_records = 0 且无 API → 展示示例数据 + banner「以下是示例数据。配置 API 后，你的难句将获得句型分析和结构化复习。」+ 「去设置 →」按钮 |
+| 无已分析 + 有 API → 示例 + 浏览引导 | 浏览器验收 | learning_records = 0 且有 API → 展示示例数据 + banner「以下是示例数据。去浏览几篇英文网页，掰it 会自动分析你的难句。」无按钮 |
+| 有已分析 + 有 API → 真实数据 | 浏览器验收 | learning_records ≥ 1 且有 API → 展示真实数据，无 banner |
+| 有已分析 + 无 API → 历史数据保留 | 浏览器验收 | learning_records ≥ 1 且无 API → 仍展示已有的已分析数据，无 banner，不回退到示例 |
+| banner 跳转 | 浏览器验收 | 点击「去设置 →」→ 切换到设置 Tab |
+| isExample 判断逻辑 | 单元测试 | isExample = (learning_records count === 0)，与 API key 无关 |
+
+#### 共享逻辑
+
+| 验收项 | 类型 | 通过标准 |
+|--------|------|----------|
+| 设置 Tab 无 banner | 浏览器验收 | 切换到设置 Tab → 任何状态下都不显示 banner |
+| 设置 Tab 始终可操作 | 浏览器验收 | 无论什么状态，API key 输入框、Provider 按钮、保存按钮均可操作 |
+| onboardingState 重构 | 单元测试 | useOnboardingState 返回 { hasApi, hasAnalyzedData } 二维状态，替代旧三态 |
+
+#### 示例数据内容（不变）
+
+| 验收项 | 类型 | 通过标准 |
+|--------|------|----------|
+| 每日回味断句练习 | 浏览器验收 | 示例模式下显示断句裸句，可点击插入断点 |
+| 每日回味高频词 | 浏览器验收 | 3 个词汇卡片：autonomous / coherent / photorealistic |
+| 每日回味周统计 | 浏览器验收 | 显示「这周掰了 15 句」 |
+| 难句集筛选标签 | 浏览器验收 | 显示 6 个筛选 chip（全部 + 5 种句式） |
+| 难句集 5 条句子 | 浏览器验收 | 5 条收起状态的句子卡片，覆盖 5 种句式 |
+
+#### 视觉
+
+| 验收项 | 类型 | 通过标准 |
+|--------|------|----------|
+| 引导 banner 样式 | 浏览器验收 | 左侧 3px 红色竖线 + `rgba(239,68,68,0.04)` 背景，位于导航栏下方内容上方 |
+| 温和引导条样式 | 浏览器验收 | Dashboard 底部引导条：`rgba(239,68,68,0.03)` 背景 + 1px `rgba(239,68,68,0.08)` 边框，圆角 10px，视觉比 banner 更轻 |
+| 引导条不遮挡内容 | 人工确认 | 温和引导条出现时不影响统计卡片和句子列表的阅读 |
 
 ### 统一扫读 + 手动掰句 + 数据采集
 
