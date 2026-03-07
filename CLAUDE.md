@@ -19,9 +19,11 @@ npm run release    # 发布：跑测试 + 构建 + 打包 bai-it.zip
 
 ## 发布
 
-用户说"发布"时，执行完整发布流程：更新版本号 → `npm run release` → git push → 上传 Chrome + Edge。
+**用户说"发布"时，Claude 自主执行完整发布流程，不需要用户跑任何命令。** 详见 [docs/release.md](./docs/release.md)。
 
-详见 [docs/release.md](./docs/release.md)
+流程概要：确认版本号 → 改 manifest.json → `npm run release` → git commit + tag + push → `gh release create` → 提醒用户手动上传商店 → 清理 zip。
+
+商店上传是唯一需要用户手动操作的步骤（需要登录网页后台）。
 
 ## 项目结构
 
