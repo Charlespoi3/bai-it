@@ -1,0 +1,29 @@
+name: Build Chrome Extension
+
+# 允许我们在网页上通过按钮手动触发此任务
+on: [workflow_dispatch] 
+
+jobs:
+  build:
+    runs-on: ubuntu-latest # 使用 GitHub 提供的云端 Ubuntu 环境
+    
+    steps:
+      - name: 拉取代码
+        uses: actions/checkout@v4
+
+      - name: 配置 Node.js 环境
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20' # 使用较新的 Node.js 版本
+
+      - name: 安装依赖
+        run: npm install
+
+      - name: 编译项目
+        run: npm run build
+
+      - name: 将打包后的 dist 目录保存为产物（Artifact）供下载
+        uses: actions/upload-artifact@v4
+        with:
+          name: my-extension-dist
+          path: dist/
